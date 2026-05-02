@@ -293,6 +293,20 @@ public class WifiReceiver extends BroadcastReceiver {
                         }
                         // }
                     }
+                } else if (prefs.getBoolean(PreferenceKeys.PREF_RECORD_WITHOUT_GPS, false)) {
+                    // testing-only path: insert the network row even without GPS so observations
+                    // can be sanity-checked against an external source. The sentinel provider
+                    // name tells DatabaseHelper.addObservation to skip the (0,0) location-row write.
+                    boolean matches = false;
+                    if (bssidDbMatcher != null) {
+                        bssidDbMatcher.reset(network.getBssid());
+                        matches = bssidDbMatcher.find();
+                    }
+                    if (!matches) {
+                        final Location placeholder = new Location(DatabaseHelper.LOCATION_PROVIDER_NO_GPS);
+                        placeholder.setTime(System.currentTimeMillis());
+                        dbHelper.addObservation(network, placeholder, added);
+                    }
                 } else {
                     // no location
                     boolean matches = false;

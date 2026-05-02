@@ -174,6 +174,10 @@ public final class BluetoothReceiver extends BroadcastReceiver implements LeScan
     // arguably expiration should live per element not-seen in n scans.
     private static final int EMPTY_LE_THRESHOLD = 10;
 
+    // The all-zero UUID is meaningless and shouldn't be persisted; Android's ScanRecord parser
+    // can emit it as a placeholder when an advertisement contains a malformed AD record.
+    private static final String NULL_UUID = "00000000-0000-0000-0000-000000000000";
+
     // scan state
     private long lastDiscoveryAt = 0;
 
@@ -308,17 +312,31 @@ public final class BluetoothReceiver extends BroadcastReceiver implements LeScan
                 if (null != scanRecord.getServiceUuids() && !scanRecord.getServiceUuids().isEmpty()) {
                     uuid16Services = new ArrayList<>();
                     for (ParcelUuid u: scanRecord.getServiceUuids()) {
-                        uuid16Services.add(u.getUuid().toString());
+                        // Skip the null UUID — Android's parser can emit it for malformed AD
+                        // records — and dedupe; the same UUID can show up in both the ADV and
+                        // SCAN_RSP combined into one ScanRecord.
+                        if (u == null || u.getUuid() == null) continue;
+                        final String s = u.getUuid().toString();
+                        if (NULL_UUID.equals(s)) continue;
+                        if (!uuid16Services.contains(s)) {
+                            uuid16Services.add(s);
+                        }
                         byte[] data = scanRecord.getServiceData(u);
                         if (null != data) {
                             //Logging.infoHexString(data);
                             //Logging.info(u.getUuid().toString() + ": " + data);
                         }
                     }
+                    if (uuid16Services.isEmpty()) {
+                        uuid16Services = null;
+                    }
                 }
 
                 Integer mfgrKey = null;
-                if (null == uuid16Services && scanRecord.getManufacturerSpecificData() != null) {
+                // Service UUIDs and manufacturer-specific data are independent AD fields and
+                // can coexist in a single advertisement; capture mfgrId regardless of whether
+                // the same packet carried a UUID list.
+                if (scanRecord.getManufacturerSpecificData() != null) {
                     SparseArray<byte[]> bytesArray= scanRecord.getManufacturerSpecificData();
                     for(int i = 0; i < bytesArray.size(); i++) {
                         mfgrKey = bytesArray.keyAt(i);
@@ -541,10 +559,31 @@ public final class BluetoothReceiver extends BroadcastReceiver implements LeScan
                         effectiveBleType = getAddressTypeFromPattern(bssid);
                     }
                     final NetworkType refinedType = refineBleType(baseType, effectiveBleType);
+
+                    // Surface EIR / SDP-cached UUIDs reported alongside ACTION_FOUND so they
+                    // flow into network.bleServiceUuids and the DB `service` column the same
+                    // way as BLE service UUIDs. device.getUuids() returns null when the
+                    // controller didn't include a UUID list in the EIR.
+                    List<String> classicUuids = null;
+                    final ParcelUuid[] devUuids = device.getUuids();
+                    if (devUuids != null && devUuids.length > 0) {
+                        classicUuids = new ArrayList<>(devUuids.length);
+                        for (ParcelUuid u : devUuids) {
+                            if (u == null || u.getUuid() == null) continue;
+                            final String s = u.getUuid().toString();
+                            if (NULL_UUID.equals(s)) continue;
+                            if (!classicUuids.contains(s)) {
+                                classicUuids.add(s);
+                            }
+                        }
+                        if (classicUuids.isEmpty()) {
+                            classicUuids = null;
+                        }
+                    }
+
                     final Network network = addOrUpdateBt(bssid, ssid, type, capabilities, rssi,
                             refinedType,
-                            //TODO: will BTLE networks in this callback ever contain uuids/mfgrId ?
-                            null, null,
+                            classicUuids, null,
                             location, prefs,
                             false);
                     if (listAdapter != null) {
@@ -858,6 +897,15 @@ public final class BluetoothReceiver extends BroadcastReceiver implements LeScan
                 // w/ location
                 if (!matches) {
                     dbHelper.addObservation(network, location, newForRun, deviceTypeUpdate, btTypeUpdate);
+                }
+            } else if (prefs.getBoolean(PreferenceKeys.PREF_RECORD_WITHOUT_GPS, false)) {
+                // testing-only path: insert the network row even without GPS so UUIDs/mfgrId can
+                // be sanity-checked against an external sniffer. The sentinel provider name
+                // tells DatabaseHelper.addObservation to skip the (0,0) location-row write.
+                if (!matches) {
+                    final Location placeholder = new Location(DatabaseHelper.LOCATION_PROVIDER_NO_GPS);
+                    placeholder.setTime(System.currentTimeMillis());
+                    dbHelper.addObservation(network, placeholder, newForRun, deviceTypeUpdate, btTypeUpdate);
                 }
             } else {
                 // bob asks "since BT are often indoors, should we be saving regardless of loc?"

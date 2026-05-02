@@ -554,6 +554,7 @@ public final class SettingsFragment extends Fragment implements DialogListener {
             PrefsBackedCheckbox.prefBackedCheckBox(thisActivity, view, R.id.use_network_location, PreferenceKeys.PREF_USE_NETWORK_LOC, false);
             PrefsBackedCheckbox.prefBackedCheckBox(thisActivity, view, R.id.disable_toast, PreferenceKeys.PREF_DISABLE_TOAST, false);
             PrefsBackedCheckbox.prefBackedCheckBox(thisActivity, view, R.id.bluetooth_le_guess, PreferenceKeys.PREF_GUESS_BLE_ADDRESS_TYPE, false);
+            PrefsBackedCheckbox.prefBackedCheckBox(thisActivity, view, R.id.record_without_gps, PreferenceKeys.PREF_RECORD_WITHOUT_GPS, false);
             PrefsBackedCheckbox.prefBackedCheckBox(thisActivity, view, R.id.boot_start, PreferenceKeys.PREF_START_AT_BOOT, false, value -> {
                 if (Build.VERSION.SDK_INT >= 29) {
                     if (value) {

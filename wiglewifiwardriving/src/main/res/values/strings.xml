@@ -451,6 +451,7 @@
     <string name="speech_new_bt">New bluetooth to DB</string>
     <string name="tts_new_bt">New bluetooth</string>
     <string name="gnss_full">Use GNSS full tracking (large battery drain)</string>
+    <string name="record_without_gps">Record observations without GPS (testing only)</string>
     <string name="search_area">Search area:</string>
     <string name="queued_jobs">(%1$d queued tasks)</string>
     <string name="duplicate_job">A job of this type is already running or waiting to run.</string>

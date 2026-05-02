@@ -87,6 +87,10 @@ public final class DatabaseHelper extends Thread {
     private SQLiteStatement updateNetworkType;
     private SQLiteStatement insertRoute;
 
+    // Sentinel Location provider name used by callers that want a network row inserted without
+    // a corresponding (0,0) row in the location table — for verification on devices with no GPS.
+    public static final String LOCATION_PROVIDER_NO_GPS = "no_gps";
+
     public static final String NETWORK_TABLE = "network";
     private static final String NETWORK_CREATE =
             "create table " + NETWORK_TABLE + " ( "
@@ -921,66 +925,75 @@ public final class DatabaseHelper extends Thread {
         //    + " changeWorthy: " + changeWorthy + " mediumChange: " + mediumChange + " smallLocDelay: " + smallLocDelay
         //    + " smallChange: " + smallChange + " latDiff: " + latDiff + " lonDiff: " + lonDiff);
 
-        if ( !blank && (isNew || bigChange || (! fastMode && changeWorthy )) ) {
-            // MainActivity.info("inserting loc: " + network.getSsid() );
-            long start;
-            insertLocationExternal.bindString(1, bssid);
-            insertLocationExternal.bindLong(2, update.level);  // make sure to use the update's level, network's is mutable...
-            insertLocationExternal.bindDouble(3, location.getLatitude());
-            insertLocationExternal.bindDouble(4, location.getLongitude());
-            insertLocationExternal.bindDouble(5, location.getAltitude());
-            insertLocationExternal.bindDouble(6, location.getAccuracy());
-            insertLocationExternal.bindLong(7, location.getTime());
-            insertLocationExternal.bindLong( 8, update.external);
-            insertLocationExternal.bindLong( 9, network.getBleMfgrIdAsInt());
-            if (db.isDbLockedByOtherThreads()) {
-                // this is kinda lame, make this better
-                Logging.error("db locked by another thread, waiting to loc insert. bssid: " + bssid
-                        + " drainSize: " + drainSize);
-                MainActivity.sleep(1000L);
-            }
-            start = System.currentTimeMillis();
-            // INSERT
-            insertLocationExternal.execute();
-            logTime(start, "db location inserted: " + bssid + " drainSize: " + drainSize);
-            // update the count
-            locationCount.incrementAndGet();
-            // update the cache
-            CachedLocation cached = new CachedLocation();
-            cached.location = location;
-            cached.bestlevel = update.level;
-            cached.bestlat = location.getLatitude();
-            cached.bestlon = location.getLongitude();
-            cached.mfgrid = network.getBleMfgrIdAsInt();
-            previousWrittenLocationsCache.put( bssid, cached );
+        // Skip the location-row write when the caller passed our no-GPS sentinel; metadata
+        // (mfgrid, service) is still persisted below so UUIDs can be verified against external
+        // sniffers without polluting the location table with (0,0) entries.
+        final boolean skipLocationInsert = LOCATION_PROVIDER_NO_GPS.equals(location.getProvider());
 
-            if ( ! isNew ) {
-                // update the network with the lasttime,lastlat,lastlon
-                updateNetwork.bindLong( 1, location.getTime() );
-                updateNetwork.bindDouble( 2, location.getLatitude() );
-                updateNetwork.bindDouble( 3, location.getLongitude() );
-                updateNetwork.bindString( 4, bssid );
-                if ( db.isDbLockedByOtherThreads() ) {
+        if ( !blank && (isNew || bigChange || (! fastMode && changeWorthy )) ) {
+            long start;
+            boolean newBest = false;
+            if (!skipLocationInsert) {
+                // MainActivity.info("inserting loc: " + network.getSsid() );
+                insertLocationExternal.bindString(1, bssid);
+                insertLocationExternal.bindLong(2, update.level);  // make sure to use the update's level, network's is mutable...
+                insertLocationExternal.bindDouble(3, location.getLatitude());
+                insertLocationExternal.bindDouble(4, location.getLongitude());
+                insertLocationExternal.bindDouble(5, location.getAltitude());
+                insertLocationExternal.bindDouble(6, location.getAccuracy());
+                insertLocationExternal.bindLong(7, location.getTime());
+                insertLocationExternal.bindLong( 8, update.external);
+                insertLocationExternal.bindLong( 9, network.getBleMfgrIdAsInt());
+                if (db.isDbLockedByOtherThreads()) {
                     // this is kinda lame, make this better
-                    Logging.error( "db locked by another thread, waiting to net update. bssid: " + bssid
-                            + " drainSize: " + drainSize );
+                    Logging.error("db locked by another thread, waiting to loc insert. bssid: " + bssid
+                            + " drainSize: " + drainSize);
                     MainActivity.sleep(1000L);
                 }
                 start = System.currentTimeMillis();
-                // UPDATE
-                updateNetwork.execute();
-                logTime( start, "db network updated" );
+                // INSERT
+                insertLocationExternal.execute();
+                logTime(start, "db location inserted: " + bssid + " drainSize: " + drainSize);
+                // update the count
+                locationCount.incrementAndGet();
+                // update the cache
+                CachedLocation cached = new CachedLocation();
+                cached.location = location;
+                cached.bestlevel = update.level;
+                cached.bestlat = location.getLatitude();
+                cached.bestlon = location.getLongitude();
+                cached.mfgrid = network.getBleMfgrIdAsInt();
+                previousWrittenLocationsCache.put( bssid, cached );
+            }
 
+            if ( ! isNew ) {
+                if (!skipLocationInsert) {
+                    // update the network with the lasttime,lastlat,lastlon
+                    updateNetwork.bindLong( 1, location.getTime() );
+                    updateNetwork.bindDouble( 2, location.getLatitude() );
+                    updateNetwork.bindDouble( 3, location.getLongitude() );
+                    updateNetwork.bindString( 4, bssid );
+                    if ( db.isDbLockedByOtherThreads() ) {
+                        // this is kinda lame, make this better
+                        Logging.error( "db locked by another thread, waiting to net update. bssid: " + bssid
+                                + " drainSize: " + drainSize );
+                        MainActivity.sleep(1000L);
+                    }
+                    start = System.currentTimeMillis();
+                    // UPDATE
+                    updateNetwork.execute();
+                    logTime( start, "db network updated" );
 
-                boolean newBest = (bestlevel == 0 || update.level > bestlevel) &&
-                        // https://github.com/wiglenet/wigle-wifi-wardriving/issues/82
-                        !likelyJunk;
+                    newBest = (bestlevel == 0 || update.level > bestlevel) &&
+                            // https://github.com/wiglenet/wigle-wifi-wardriving/issues/82
+                            !likelyJunk;
 
-                // MainActivity.info("META testing network: " + bssid + " newBest: " + newBest + " updatelevel: " + update.level + " bestlevel: " + bestlevel);
-                if (newBest) {
-                    bestlevel = update.level;
-                    bestlat = location.getLatitude();
-                    bestlon = location.getLongitude();
+                    // MainActivity.info("META testing network: " + bssid + " newBest: " + newBest + " updatelevel: " + update.level + " bestlevel: " + bestlevel);
+                    if (newBest) {
+                        bestlevel = update.level;
+                        bestlat = location.getLatitude();
+                        bestlon = location.getLongitude();
+                    }
                 }
 
                 if (update.typeMorphed) {

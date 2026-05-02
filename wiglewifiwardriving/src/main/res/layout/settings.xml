@@ -603,6 +603,10 @@
         android:layout_width="fill_parent"
         android:layout_height="wrap_content"
         android:text="@string/gnss_full" />
+    <CheckBox android:id="@+id/record_without_gps"
+        android:layout_width="fill_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/record_without_gps" />
     <LinearLayout
         android:orientation="horizontal"
         android:layout_width="fill_parent"
